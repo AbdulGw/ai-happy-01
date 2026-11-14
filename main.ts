@@ -1,50 +1,54 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// i flipped the very first pancake extra happy for you, dear judge (love, tariq 6)
-const ASSET_PATH = "tariq-first-happy-pancake.jpg";
-const PROFILE = "abdulgw";
-const BYTES_EXPECTED = 152506;
-const SHA_EXPECTED = "cd7d96fe085b13574e0a3844bb4606832bd1487c9cad17f30a181fcc7519c37c";
-const PIXELS = 1024;
-const LIMIT_BYTES = 1048576;
+// Entry: my warmest fuzzy sock blanket so you win first place in cozy (love, tariq 6)
+const SPEC = {
+  asset: "tariq-cozy-sock-blanket-judge.jpg",
+  bytes: 303215,
+  sha256: "ae54680b5639a4bf82634a93e2caf0e64b6968259bd844183558a530f9066849",
+  tag: "abdulgw",
+};
 
-function extractSofSize(raw: Buffer): readonly [number, number] {
-  if (raw.length < 4 || raw[0] !== 0xff || raw[1] !== 0xd8 || raw[raw.length - 2] !== 0xff || raw[raw.length - 1] !== 0xd9) {
-    throw new Error("Malformed JPEG wrapper");
+function parseDimensions(buf: Buffer): [number, number] {
+  if (buf.subarray(0, 2).toString("hex") !== "ffd8" || buf.subarray(buf.length - 2).toString("hex") !== "ffd9") {
+    throw new Error("Invalid JPEG structure");
   }
-  let cursor = 2;
-  while (cursor + 4 <= raw.length) {
-    while (cursor < raw.length && raw[cursor] === 0xff) cursor++;
-    if (cursor >= raw.length) break;
-    const mk = raw[cursor++];
-    if (mk === 0xd9 || mk === 0x01 || (mk >= 0xd0 && mk <= 0xd7)) continue;
-    const len = raw.readUInt16BE(cursor);
-    if (mk === 0xc0 || mk === 0xc2) return [raw.readUInt16BE(cursor + 5), raw.readUInt16BE(cursor + 3)];
-    cursor += len;
+  let i = 2;
+  while (i + 4 <= buf.length) {
+    if (buf[i] !== 0xff) throw new Error("JPEG sync loss");
+    while (i < buf.length && buf[i] === 0xff) i++;
+    const code = buf[i++];
+    if (code === 0xd9 || code === 0x01 || (code >= 0xd0 && code <= 0xd7)) continue;
+    const len = buf.readUInt16BE(i);
+    if (code === 0xc0 || code === 0xc2) {
+      return [buf.readUInt16BE(i + 5), buf.readUInt16BE(i + 3)];
+    }
+    i += len;
   }
-  throw new Error("Frame header absent");
+  throw new Error("Dimension frame missing");
 }
 
-function run(): void {
-  const cwdHere = dirname(fileURLToPath(import.meta.url));
-  const picked = [join(cwdHere, ASSET_PATH), join("/bot", ASSET_PATH)].find((p) => existsSync(p));
-  if (!picked) throw new Error(`Missing ${ASSET_PATH}`);
-  const data = readFileSync(picked);
-  if (data.byteLength !== BYTES_EXPECTED || data.byteLength > LIMIT_BYTES) {
-    throw new Error(`Invalid byte count ${data.byteLength}`);
+function runPublish(): void {
+  const baseDir = dirname(fileURLToPath(import.meta.url));
+  const searchPaths = [resolve(baseDir, SPEC.asset), resolve("/bot", SPEC.asset)];
+  const assetPath = searchPaths.find((p) => existsSync(p));
+  if (!assetPath) throw new Error(`Asset not found: ${SPEC.asset}`);
+
+  const buf = readFileSync(assetPath);
+  if (buf.length !== SPEC.bytes || buf.length > 1048576) {
+    throw new Error(`Length check failed: ${buf.length}`);
   }
-  const [w, h] = extractSofSize(data);
-  if (w !== PIXELS || h !== PIXELS) throw new Error(`Bad geometry ${w}x${h}`);
-  const sha = createHash("sha256").update(data).digest("hex");
-  if (sha !== SHA_EXPECTED) throw new Error(`SHA mismatch ${sha}`);
+  const [w, h] = parseDimensions(buf);
+  if (w !== 1024 || h !== 1024) throw new Error(`Unexpected bounds: ${w}x${h}`);
+
+  const hex = createHash("sha256").update(buf).digest("hex");
+  if (hex !== SPEC.sha256) throw new Error(`Checksum failed: ${hex}`);
+
   const outDir = process.env.MAKEFUN_OUTPUT_DIR || "/output";
   mkdirSync(outDir, { recursive: true });
-  const outPng = join(outDir, "entry.png");
-  writeFileSync(outPng, data);
-  if (process.env.MAKEFUN_VERBOSE === "1") console.log(`[${PROFILE}] emitted ${data.length}B -> ${outPng}`);
+  writeFileSync(resolve(outDir, "entry.png"), buf);
 }
 
-run();
+runPublish();
